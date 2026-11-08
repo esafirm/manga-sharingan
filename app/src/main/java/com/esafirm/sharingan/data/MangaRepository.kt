@@ -8,6 +8,10 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,7 +22,13 @@ import java.io.File
 import java.util.UUID
 
 class MangaRepository(private val context: Context) {
-    private val dao = Room.databaseBuilder(context, AppDatabase::class.java, "sharingan.db").build().mangaDao()
+    private val dao = Room.databaseBuilder(context, AppDatabase::class.java, "sharingan.db")
+        .addMigrations(object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE manga ADD COLUMN contentHash TEXT")
+            }
+        })
+        .build().mangaDao()
 
     /** Outlives any screen so progress is never lost when the reader is torn down. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -40,8 +50,16 @@ class MangaRepository(private val context: Context) {
         val fileName = "${UUID.randomUUID()}.pdf"
         val target = File(pdfDir, fileName)
         try {
-            context.contentResolver.openInputStream(uri)!!.use { input ->
-                target.outputStream().use { input.copyTo(it, 256 * 1024) }
+            val digest = MessageDigest.getInstance("SHA-256")
+            context.contentResolver.openInputStream(uri)!!.use { raw ->
+                DigestInputStream(raw, digest).use { input ->
+                    target.outputStream().use { input.copyTo(it, 256 * 1024) }
+                }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            dao.findByHash(hash)?.let { existing ->
+                target.delete()
+                return@withContext Result.success(existing) // already in the library
             }
             val coverName = "${fileName.removeSuffix(".pdf")}.jpg"
             val pages = ParcelFileDescriptor.open(target, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
@@ -57,6 +75,7 @@ class MangaRepository(private val context: Context) {
                 coverName = coverName.takeIf { File(coverDir, it).exists() },
                 pageCount = pages,
                 addedAt = System.currentTimeMillis(),
+                contentHash = hash,
             )
             Result.success(manga.copy(id = dao.insert(manga)))
         } catch (t: Throwable) {

@@ -15,6 +15,9 @@ interface MangaDao {
     @Query("SELECT * FROM manga WHERE id = :id")
     suspend fun get(id: Long): Manga?
 
+    @Query("SELECT * FROM manga WHERE contentHash = :hash LIMIT 1")
+    suspend fun findByHash(hash: String): Manga?
+
     @Insert
     suspend fun insert(manga: Manga): Long
 
@@ -28,7 +31,7 @@ interface MangaDao {
     suspend fun delete(id: Long)
 }
 
-@Database(entities = [Manga::class], version = 1, exportSchema = false)
+@Database(entities = [Manga::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun mangaDao(): MangaDao
 }

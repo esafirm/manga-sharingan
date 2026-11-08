@@ -23,6 +23,8 @@ data class Manga(
     val status: ReadStatus = ReadStatus.UNREAD,
     val addedAt: Long,
     val lastReadAt: Long = 0,
+    /** SHA-256 of the PDF bytes, used to skip re-imports of the same file. */
+    val contentHash: String? = null,
 ) {
     val progress: Float
         get() = if (pageCount <= 1) 0f else (lastPage.toFloat() / (pageCount - 1)).coerceIn(0f, 1f)
