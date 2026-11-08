@@ -3,6 +3,7 @@ package com.esafirm.sharingan.data
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
@@ -21,6 +22,18 @@ interface MangaDao {
     @Insert
     suspend fun insert(manga: Manga): Long
 
+    @Query("SELECT * FROM series")
+    fun observeSeriesMeta(): Flow<List<SeriesMeta>>
+
+    @Query("SELECT * FROM series WHERE seriesKey = :key")
+    suspend fun getSeriesMeta(key: String): SeriesMeta?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSeriesMeta(meta: SeriesMeta)
+
+    @Query("DELETE FROM series WHERE seriesKey = :key")
+    suspend fun deleteSeriesMeta(key: String)
+
     @Query("UPDATE manga SET lastPage = :page, status = :status, lastReadAt = :now WHERE id = :id")
     suspend fun updateProgress(id: Long, page: Int, status: ReadStatus, now: Long)
 
@@ -31,7 +44,7 @@ interface MangaDao {
     suspend fun delete(id: Long)
 }
 
-@Database(entities = [Manga::class], version = 2, exportSchema = false)
+@Database(entities = [Manga::class, SeriesMeta::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun mangaDao(): MangaDao
 }

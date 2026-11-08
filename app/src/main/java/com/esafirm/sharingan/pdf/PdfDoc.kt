@@ -7,12 +7,14 @@ import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * A PDF opened for reading. [PdfRenderer] allows a single open page at a time, so renders are
@@ -27,7 +29,15 @@ class PdfDoc(file: File, private val renderWidth: Int) {
 
     val pageCount = renderer.pageCount
 
-    private val cache = object : LruCache<Int, Bitmap>((Runtime.getRuntime().maxMemory() / 6).toInt()) {
+    /** Height/width of page 1; used to size not-yet-rendered pages so scrolling doesn't jump. */
+    private val defaultRatio: Float =
+        runCatching { renderer.openPage(0).use { it.height.toFloat() / it.width } }.getOrDefault(1.4f)
+    private val ratios = ConcurrentHashMap<Int, Float>()
+
+    /** Best known height/width for [index] (exact once rendered). */
+    fun ratio(index: Int): Float = ratios[index] ?: defaultRatio
+
+    private val cache = object : LruCache<Int, Bitmap>((Runtime.getRuntime().maxMemory() / 4).toInt()) {
         override fun sizeOf(key: Int, value: Bitmap) = value.byteCount
     }
 
@@ -49,14 +59,18 @@ class PdfDoc(file: File, private val renderWidth: Int) {
             val bmp = Bitmap.createBitmap(renderWidth, h, Bitmap.Config.ARGB_8888)
             bmp.eraseColor(Color.WHITE)
             page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            ratios[index] = h.toFloat() / renderWidth
             bmp
         }
     }.getOrNull()
 
-    /** Warm the cache around [center] (nearest first). */
+    private var prefetchJob: Job? = null
+
+    /** Warm the cache around [center], reading direction first. Replaces any earlier prefetch. */
     fun prefetch(scope: CoroutineScope, center: Int) {
-        scope.launch {
-            for (i in intArrayOf(center, center + 1, center - 1, center + 2)) {
+        prefetchJob?.cancel()
+        prefetchJob = scope.launch {
+            for (i in intArrayOf(center, center + 1, center + 2, center + 3, center - 1)) {
                 if (i in 0 until pageCount) page(i)
             }
         }

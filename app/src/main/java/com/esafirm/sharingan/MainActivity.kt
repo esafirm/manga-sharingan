@@ -8,41 +8,97 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.activity.viewModels
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
+import com.esafirm.sharingan.data.nextAfter
 import com.esafirm.sharingan.ui.LibraryScreen
+import com.esafirm.sharingan.ui.LibraryViewModel
 import com.esafirm.sharingan.ui.ReaderScreen
+import com.esafirm.sharingan.ui.SeriesScreen
+import com.esafirm.sharingan.ui.SharinganTheme
 import kotlinx.coroutines.launch
+
+sealed interface Screen {
+    data object Library : Screen
+    data class Series(val key: String) : Screen
+    data class Reader(val id: Long) : Screen
+}
 
 class MainActivity : ComponentActivity() {
     private val repo get() = (application as SharinganApp).repo
-    private var openId by mutableStateOf<Long?>(null)
+    private val vm: LibraryViewModel by viewModels()
+    private val stack = mutableStateListOf<Screen>(Screen.Library)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                val id = openId
-                if (id == null) {
-                    LibraryScreen(repo = repo, onOpen = { openId = it })
-                } else {
-                    BackHandler { openId = null }
-                    ReaderScreen(repo = repo, id = id, onClose = { openId = null })
-                }
-            }
-        }
+        setContent { SharinganTheme { Root() } }
         if (savedInstanceState == null) handleIncoming(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncoming(intent)
+    }
+
+    private fun pop() {
+        if (stack.size > 1) stack.removeAt(stack.lastIndex)
+    }
+
+    private fun openReader(id: Long) {
+        if (stack.last() is Screen.Reader) stack[stack.lastIndex] = Screen.Reader(id) else stack.add(Screen.Reader(id))
+    }
+
+    @Composable
+    private fun Root() {
+        val gridState = rememberLazyGridState()
+        val all by vm.allSeries.collectAsState()
+        BackHandler(enabled = stack.size > 1) { pop() }
+
+        AnimatedContent(
+            targetState = stack.last(),
+            transitionSpec = {
+                (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 12 }) togetherWith fadeOut(tween(120))
+            },
+            label = "screen",
+        ) { screen ->
+            when (screen) {
+                Screen.Library -> LibraryScreen(
+                    vm = vm,
+                    gridState = gridState,
+                    onOpenSeries = { s ->
+                        // A series with a single file skips the detail page and just opens the book.
+                        if (s.items.size == 1) openReader(s.items.first().manga.id) else stack.add(Screen.Series(s.key))
+                    },
+                    onResume = { openReader(it) },
+                )
+                is Screen.Series -> SeriesScreen(
+                    vm = vm,
+                    key = screen.key,
+                    onBack = { pop() },
+                    onOpen = { openReader(it) },
+                )
+                is Screen.Reader -> ReaderScreen(
+                    repo = repo,
+                    id = screen.id,
+                    next = all?.nextAfter(screen.id),
+                    onClose = { pop() },
+                    onOpenNext = { openReader(it) },
+                )
+            }
+        }
     }
 
     /** PDFs sent from Telegram (or any app) via "Open with" or "Share". */
@@ -62,9 +118,9 @@ class MainActivity : ComponentActivity() {
             val failed = results.size - imported.size
             if (failed > 0) Toast.makeText(this@MainActivity, "$failed file(s) couldn't be imported", Toast.LENGTH_LONG).show()
             when {
-                imported.size == 1 -> openId = imported[0].id // single file: start reading right away
+                imported.size == 1 -> openReader(imported[0].id) // single file: start reading right away
                 imported.size > 1 -> {
-                    openId = null
+                    while (stack.size > 1) stack.removeAt(stack.lastIndex)
                     Toast.makeText(this@MainActivity, "Added ${imported.size} manga", Toast.LENGTH_SHORT).show()
                 }
             }

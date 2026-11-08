@@ -24,3 +24,6 @@ jobs:
         with:
           name: sharingan-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Unit tests
+        if: always()
+        run: ./gradlew testDebugUnitTest --stacktrace
