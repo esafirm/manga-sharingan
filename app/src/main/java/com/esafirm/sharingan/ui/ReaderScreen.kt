@@ -4,6 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -13,6 +16,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
@@ -48,6 +52,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -61,6 +66,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -74,6 +80,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.toSize
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.esafirm.sharingan.data.Manga
@@ -81,6 +88,8 @@ import com.esafirm.sharingan.data.MangaRepository
 import com.esafirm.sharingan.data.SeriesItem
 import com.esafirm.sharingan.pdf.PdfDoc
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 
 enum class ReadMode(val label: String) {
     SCROLL("Scroll"),
@@ -273,45 +282,25 @@ private fun ScrollPages(
     onTap: () -> Unit,
     footer: @Composable () -> Unit,
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
+    val zoom = remember { ZoomState() }
+    val scope = rememberCoroutineScope()
 
     Box(
-        Modifier.fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onTap() },
-                    onDoubleTap = {
-                        if (scale > 1f) { scale = 1f; offsetX = 0f } else scale = 2f
-                    },
-                )
-            }
-            .pointerInput(Unit) {
-                // Runs before the list sees events (Initial pass) but only claims them when pinching or
-                // already zoomed in, so a normal one-finger swipe still scrolls the list.
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                    do {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val multi = event.changes.size > 1
-                        if (scale > 1f || multi) {
-                            val pan = event.calculatePan()
-                            scale = (scale * event.calculateZoom()).coerceIn(1f, 4f)
-                            val maxX = size.width * (scale - 1f) / 2f
-                            offsetX = if (scale == 1f) 0f else (offsetX + pan.x).coerceIn(-maxX, maxX)
-                            if (scale > 1f && !multi) state.dispatchRawDelta(-pan.y / scale)
-                            event.changes.forEach { it.consume() }
-                        }
-                    } while (event.changes.any { it.pressed })
-                }
-            },
+        Modifier.fillMaxSize().zoomable(
+            zoom = zoom,
+            scope = scope,
+            onTap = onTap,
+            // Zoomed in: one-finger vertical drags scroll the list; horizontal drags pan the zoom.
+            onVerticalPan = { dy -> state.dispatchRawDelta(dy) },
+        ),
     ) {
         LazyColumn(
             state = state,
             modifier = Modifier.fillMaxSize().graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-                translationX = offsetX
+                scaleX = zoom.scale
+                scaleY = zoom.scale
+                translationX = zoom.offset.x
+                translationY = zoom.offset.y
             },
         ) {
             items(count, key = { it }) { index -> ScrollPage(doc, index) }
@@ -346,40 +335,11 @@ private fun ScrollPage(doc: PdfDoc?, index: Int) {
 @Composable
 private fun PdfPage(doc: PdfDoc?, index: Int, onTap: () -> Unit) {
     val bitmap by produceState<Bitmap?>(doc?.cached(index), doc, index) { value = doc?.page(index) }
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    val zoom = remember(index) { ZoomState() }
+    val scope = rememberCoroutineScope()
 
     Box(
-        Modifier.fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onTap() },
-                    onDoubleTap = {
-                        if (scale > 1f) { scale = 1f; offset = Offset.Zero } else scale = 2.5f
-                    },
-                )
-            }
-            .pointerInput(Unit) {
-                // Only claim gestures when pinching or already zoomed, so 1x swipes reach the pager.
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    do {
-                        val event = awaitPointerEvent()
-                        if (scale > 1f || event.changes.size > 1) {
-                            scale = (scale * event.calculateZoom()).coerceIn(1f, 5f)
-                            val maxX = size.width * (scale - 1f) / 2f
-                            val maxY = size.height * (scale - 1f) / 2f
-                            val pan = event.calculatePan()
-                            offset = Offset(
-                                (offset.x + pan.x * scale).coerceIn(-maxX, maxX),
-                                (offset.y + pan.y * scale).coerceIn(-maxY, maxY),
-                            )
-                            if (scale == 1f) offset = Offset.Zero
-                            event.changes.forEach { if (it.positionChanged()) it.consume() }
-                        }
-                    } while (event.changes.any { it.pressed })
-                }
-            },
+        Modifier.fillMaxSize().zoomable(zoom = zoom, scope = scope, onTap = onTap),
         contentAlignment = Alignment.Center,
     ) {
         val bmp = bitmap
@@ -391,10 +351,129 @@ private fun PdfPage(doc: PdfDoc?, index: Int, onTap: () -> Unit) {
                 contentDescription = "Page ${index + 1}",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = scale; scaleY = scale
-                    translationX = offset.x; translationY = offset.y
+                    scaleX = zoom.scale
+                    scaleY = zoom.scale
+                    translationX = zoom.offset.x
+                    translationY = zoom.offset.y
                 },
             )
         }
     }
+}
+
+/**
+ * Pinch / double-tap zoom. The layer scales around its centre, so every change is expressed as a
+ * translation that keeps the touched point under the finger.
+ */
+@Stable
+private class ZoomState(
+    private val maxScale: Float = 4f,
+    private val doubleTapScale: Float = 2.5f,
+) {
+    var scale by mutableFloatStateOf(1f)
+        private set
+    var offset by mutableStateOf(Offset.Zero)
+        private set
+
+    private var job: Job? = null
+
+    val isZoomed: Boolean get() = scale > 1.001f
+
+    fun cancelAnimation() {
+        job?.cancel()
+    }
+
+    private fun clamp(t: Offset, s: Float, size: Size): Offset {
+        val maxX = size.width * (s - 1f) / 2f
+        val maxY = size.height * (s - 1f) / 2f
+        return Offset(t.x.coerceIn(-maxX, maxX), t.y.coerceIn(-maxY, maxY))
+    }
+
+    /** Direct (finger-driven) change: pinch around [centroid] plus [pan]. */
+    fun transform(centroid: Offset, pan: Offset, zoomChange: Float, size: Size, lockY: Boolean) {
+        val s0 = scale
+        val s1 = (s0 * zoomChange).coerceIn(1f, maxScale)
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val focus = centroid - center
+        val movement = if (lockY) Offset(pan.x, 0f) else pan
+        val t = focus - (focus - offset) * (s1 / s0) + movement
+        scale = s1
+        offset = if (s1 <= 1f) Offset.Zero else clamp(t, s1, size)
+    }
+
+    /** Double-tap: animate to [doubleTapScale] centred on [tap], or back out if already zoomed. */
+    fun toggle(tap: Offset, size: Size, scope: CoroutineScope) {
+        job?.cancel()
+        val s0 = scale
+        val t0 = offset
+        val s1: Float
+        val t1: Offset
+        if (s0 > 1.05f) {
+            s1 = 1f
+            t1 = Offset.Zero
+        } else {
+            s1 = doubleTapScale
+            val focus = tap - Offset(size.width / 2f, size.height / 2f)
+            t1 = clamp(focus - (focus - t0) * (s1 / s0), s1, size)
+        }
+        job = scope.launch {
+            animate(0f, 1f, animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)) { f, _ ->
+                scale = s0 + (s1 - s0) * f
+                offset = Offset(t0.x + (t1.x - t0.x) * f, t0.y + (t1.y - t0.y) * f)
+            }
+        }
+    }
+}
+
+/**
+ * Tap, double-tap-to-zoom and pinch/pan. Gestures are only claimed when pinching, or once a finger
+ * has moved past touch slop while zoomed in, so plain taps and 1x swipes (list scroll / pager) keep working.
+ *
+ * @param onVerticalPan if set, a one-finger vertical drag while zoomed is forwarded here (as a scroll
+ * delta) instead of moving the zoomed image.
+ */
+@Composable
+private fun Modifier.zoomable(
+    zoom: ZoomState,
+    scope: CoroutineScope,
+    onTap: () -> Unit,
+    onVerticalPan: ((Float) -> Unit)? = null,
+): Modifier {
+    val tap by rememberUpdatedState(onTap)
+    val verticalPan by rememberUpdatedState(onVerticalPan)
+    return this
+        .pointerInput(zoom) {
+            detectTapGestures(
+                onTap = { tap() },
+                onDoubleTap = { pos -> zoom.toggle(pos, size.toSize(), scope) },
+            )
+        }
+        .pointerInput(zoom) {
+            awaitEachGesture {
+                // Initial pass: runs before children (list / pager) see the event.
+                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                zoom.cancelAnimation()
+                var travelled = 0f
+                do {
+                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                    val multi = event.changes.size > 1
+                    if (zoom.isZoomed || multi) {
+                        val pan = event.calculatePan()
+                        travelled += pan.getDistance()
+                        if (multi || travelled > viewConfiguration.touchSlop) {
+                            val forwardY = verticalPan != null && !multi
+                            zoom.transform(
+                                centroid = event.calculateCentroid(),
+                                pan = pan,
+                                zoomChange = event.calculateZoom(),
+                                size = size.toSize(),
+                                lockY = forwardY,
+                            )
+                            if (forwardY) verticalPan?.invoke(-pan.y / zoom.scale)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                } while (event.changes.any { it.pressed })
+            }
+        }
 }
