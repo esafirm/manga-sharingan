@@ -97,7 +97,7 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
           ls -l dist | awk 'NR>1{printf "%8.2f MB  %s\n", $5/1048576, $9}' >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sharingan-${{ steps.v.outputs.version }}
           path: dist/*
