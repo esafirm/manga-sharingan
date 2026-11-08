@@ -1,0 +1,119 @@
+name: Release
+
+# Push a tag like v1.2.3 to build, sign and publish a GitHub Release.
+# Or run it manually for a dry run (artifacts only) / to publish without tagging first.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v (e.g. 1.2.3 or 1.2.3-rc1)"
+        required: true
+      publish:
+        description: "Create the GitHub Release (otherwise only upload build artifacts)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: v
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#v}"; else VERSION="${{ inputs.version }}"; fi
+          if ! [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::'$VERSION' is not a valid version (expected MAJOR.MINOR.PATCH[-suffix])"; exit 1
+          fi
+          # versionCode grows monotonically with the semver: 1.2.3 -> 1002003
+          CODE=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ "$VERSION" == *-* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (versionCode $CODE)"
+
+      - name: Check signing secrets
+        run: |
+          missing=""
+          for n in KEYSTORE_BASE64 SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
+            [ -n "${!n}" ] || missing="$missing $n"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Release signing secrets are not configured. Run scripts/create-keystore.sh and add the ANDROID_* secrets (see docs/RELEASING.md)."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Decode keystore
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Test, build APK + AAB (R8 full mode, shrunk resources)
+        run: |
+          ./gradlew testDebugUnitTest assembleRelease bundleRelease \
+            -PversionName="${{ steps.v.outputs.version }}" \
+            -PversionCode="${{ steps.v.outputs.code }}" \
+            --console=plain 2>&1 | tee build.log
+
+      - name: Verify APK signature
+        run: |
+          APKSIGNER="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+
+      - name: Collect release files
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/sharingan-$V.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "dist/sharingan-$V.aab"
+          cp app/build/outputs/mapping/release/mapping.txt "dist/sharingan-$V-mapping.txt"
+          (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          ls -l dist | awk 'NR>1{printf "%8.2f MB  %s\n", $5/1048576, $9}' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sharingan-${{ steps.v.outputs.version }}
+          path: dist/*
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.v.outputs.version }}"
+          FLAGS="--generate-notes --title Sharingan-$V"
+          [ "${{ steps.v.outputs.prerelease }}" = "true" ] && FLAGS="$FLAGS --prerelease"
+          gh release create "v$V" dist/* --target "$GITHUB_SHA" $FLAGS
+
+      - name: Error summary
+        if: failure()
+        run: |
+          echo "=============== ERROR SUMMARY ==============="
+          grep -hE -A3 '^e: |^\* What went wrong|FAILED$|AssertionError|expected:' build.log | head -120 || true

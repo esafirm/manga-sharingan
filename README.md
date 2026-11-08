@@ -14,4 +14,7 @@ A fast, minimal Android manga (PDF) reader.
 - LRU bitmap cache + prefetch of neighbouring pages; stale renders are cancelled when you flick past.
 
 ## Build
-Open in Android Studio, or `./gradlew assembleDebug` (needs Android SDK 35).
+Requires **Android 16 (API 36) or newer** on the device. Open in Android Studio, or run `./gradlew assembleDebug` (JDK 17, Android SDK 37).
+
+## Releases
+Tag `vX.Y.Z` to publish a signed, R8-optimized APK/AAB. See [docs/RELEASING.md](docs/RELEASING.md).

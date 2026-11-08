@@ -1,54 +1,78 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("com.google.devtools.ksp")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
+
+// Release signing comes from the environment so no secret ever lives in the repo.
+// Without these variables the release build is produced unsigned (CI uses that to verify R8).
+fun env(name: String): String? = providers.environmentVariable(name).orNull
 
 android {
     namespace = "com.esafirm.sharingan"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.esafirm.sharingan"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        minSdk = 36 // Android 16+
+        targetSdk = 36
+        versionCode = providers.gradleProperty("versionCode").map(String::toInt).orElse(1).get()
+        versionName = providers.gradleProperty("versionName").orElse("0.1.0").get()
+    }
+
+    signingConfigs {
+        env("SIGNING_KEYSTORE_PATH")?.let { path ->
+            create("release") {
+                storeFile = file(path)
+                storePassword = env("SIGNING_STORE_PASSWORD")
+                keyAlias = env("SIGNING_KEY_ALIAS")
+                keyPassword = env("SIGNING_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
+            // R8 full mode: shrink + optimize + obfuscate code, and drop unused resources.
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
-    testOptions { unitTests.isReturnDefaultValues = true }
     buildFeatures { compose = true }
+
+    packaging {
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    }
+    // Don't embed the (Google-only) dependency metadata blob in the APK/AAB.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
-    implementation(composeBom)
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.activity:activity-compose:1.9.2")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.icons.core)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.coil.compose)
 
-    val room = "2.6.1"
-    implementation("androidx.room:room-runtime:$room")
-    implementation("androidx.room:room-ktx:$room")
-    ksp("androidx.room:room-compiler:$room")
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

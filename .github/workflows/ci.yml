@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash # enables pipefail so `| tee` doesn't hide a failing build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --console=plain 2>&1 | tee -a build.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sharingan-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --console=plain 2>&1 | tee -a build.log
+
+      # Unsigned, but fully minified/optimized: proves R8 + resource shrinking succeed on every push.
+      - name: Build release (R8, unsigned)
+        run: ./gradlew assembleRelease --console=plain 2>&1 | tee -a build.log
+
+      - name: Size report
+        run: |
+          {
+            echo "### APK sizes"
+            echo '```'
+            ls -l app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk | awk '{printf "%8.2f MB  %s\n", $5/1048576, $9}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Compact error digest at the very end of the log (easy to read, even through the API).
+      - name: Error summary
+        if: failure()
+        run: |
+          echo "=============== ERROR SUMMARY ==============="
+          grep -hE -A3 '^e: |^\* What went wrong|FAILED$|AssertionError|expected:' build.log | head -120 || true
