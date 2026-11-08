@@ -40,6 +40,15 @@ and AAB → verifies the APK signature → publishes a GitHub Release with the A
 CI (`ci.yml`) also builds the unsigned release variant on every push so an R8 problem is caught
 before tagging.
 
+## Debug builds and the committed debug key
+
+`app/debug.keystore` is committed on purpose (alias `androiddebugkey`, password `android`). Every
+debug build, local or CI, is signed with it, so a new debug APK installs **over** the previous one
+and keeps your library. It is a public key for development only: never publish a build signed with
+it. CI checks that each debug APK carries this key's fingerprint
+(`04:AF:C9:44:88:55:2B:06:CF:15:E2:51:3E:76:A6:81:DD:4E:51:10:9E:CB:59:2A:4B:B2:79:6D:F9:48:58:02`).
+If you ever regenerate the keystore, update `EXPECTED_SHA256` in `.github/workflows/ci.yml`.
+
 ## Local release build
 
 ```sh

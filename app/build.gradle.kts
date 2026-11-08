@@ -21,6 +21,16 @@ android {
     }
 
     signingConfigs {
+        // Debug builds all share ONE committed key so every build installs over the previous one.
+        // This key (and its well-known "android" password) is public on purpose: it is for debug
+        // builds only and must never be used to sign anything you publish. Releases use the
+        // secret key from the environment below.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         env("SIGNING_KEYSTORE_PATH")?.let { path ->
             create("release") {
                 storeFile = file(path)
