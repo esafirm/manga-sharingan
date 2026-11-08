@@ -29,24 +29,42 @@ data class ParsedName(
 }
 
 object FileNameParser {
-    private val brackets = Regex("""\[[^\]]*]|\([^)]*\)|\{[^}]*}""")
-    private val dotNotBetweenDigits = Regex("""(?<!\d)\.|\.(?!\d)""")
-    private val spaces = Regex("""\s+""")
+    /**
+     * All patterns live in their own holder so a pattern problem can never crash class loading of
+     * [FileNameParser]. NOTE: Android compiles these with the ICU engine, which is stricter than the
+     * JVM's (e.g. a bare `}` or `]` is an error), so every special character is escaped explicitly.
+     */
+    private object Patterns {
+        val brackets = Regex("""\[[^\]]*\]|\([^\)]*\)|\{[^\}]*\}""")
+        val dotNotBetweenDigits = Regex("""(?<!\d)\.|\.(?!\d)""")
+        val spaces = Regex("""\s+""")
+        val pdfExt = Regex("""(?i)\.pdf$""")
 
-    private val marker = Regex(
-        """(?<![\p{L}\d])(chapters?|chap|ch|episodes?|ep|volumes?|vol|tome|book|bk|c|v)(?![\p{L}])\s*(\d+(?:\.\d+)?)""" +
-            """(?:\s*(?:-|–|—|~|to)\s*(?:(?:chapters?|chap|ch|c|volumes?|vol|v)\s*)?(\d+(?:\.\d+)?))?""",
-        RegexOption.IGNORE_CASE,
-    )
+        val marker = Regex(
+            """(?<![\p{L}\d])(chapters?|chap|ch|episodes?|ep|volumes?|vol|tome|book|bk|c|v)(?![\p{L}])\s*(\d+(?:\.\d+)?)""" +
+                """(?:\s*(?:-|–|—|~|to)\s*(?:(?:chapters?|chap|ch|c|volumes?|vol|v)\s*)?(\d+(?:\.\d+)?))?""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        val trailingNumber = Regex("""^(.*?)[\s\-–:#]+(\d+(?:\.\d+)?)(?:\s*[\-–~]\s*(\d+(?:\.\d+)?))?$""")
+
+        val tagTail = Regex(
+            """(?i)[\s\-–—:,]+(upscaled?\d*x?|upscale|\d+x|x\d+|digital|scans?|raw|hq|hd|colou?red|\d{3,4}p|repack|complete|official|fixed)$""",
+        )
+    }
+
     private val volumeWords = setOf("volume", "volumes", "vol", "tome", "book", "bk", "v")
 
-    private val trailingNumber = Regex("""^(.*?)[\s\-–:#]+(\d+(?:\.\d+)?)(?:\s*[-–~]\s*(\d+(?:\.\d+)?))?$""")
+    /** Never throws: if anything goes wrong we just fall back to the plain file name. */
+    fun parse(rawTitle: String): ParsedName =
+        try {
+            parseInternal(rawTitle)
+        } catch (t: Throwable) {
+            val plain = rawTitle.replace('_', ' ').trim().ifEmpty { rawTitle }
+            ParsedName(plain, plain.lowercase().filter { it.isLetterOrDigit() }.ifEmpty { rawTitle.lowercase() })
+        }
 
-    private val tagTail = Regex(
-        """(?i)[\s\-–—:,]+(upscaled?\d*x?|upscale|\d+x|x\d+|digital|scans?|raw|hq|hd|colou?red|\d{3,4}p|repack|complete|official|fixed)$""",
-    )
-
-    fun parse(rawTitle: String): ParsedName {
+    private fun parseInternal(rawTitle: String): ParsedName {
         val cleaned = clean(rawTitle)
 
         var volume: Double? = null
@@ -57,7 +75,7 @@ object FileNameParser {
         var numberEnd: Double? = null
         var titlePart = cleaned
 
-        val matches = marker.findAll(cleaned).toList()
+        val matches = Patterns.marker.findAll(cleaned).toList()
         if (matches.isNotEmpty()) {
             var titleEnd = cleaned.length
             for (m in matches) {
@@ -73,7 +91,7 @@ object FileNameParser {
             }
             titlePart = cleaned.substring(0, titleEnd)
         } else {
-            trailingNumber.find(cleaned)?.let { m ->
+            Patterns.trailingNumber.find(cleaned)?.let { m ->
                 titlePart = m.groupValues[1]
                 number = m.groupValues[2].toDouble()
                 numberEnd = m.groupValues[3].takeIf { it.isNotEmpty() }?.toDouble()
@@ -88,17 +106,17 @@ object FileNameParser {
     }
 
     private fun clean(raw: String): String =
-        raw.replace(Regex("""(?i)\.pdf$"""), "")
-            .replace(brackets, " ")
+        raw.replace(Patterns.pdfExt, "")
+            .replace(Patterns.brackets, " ")
             .replace('_', ' ')
-            .replace(dotNotBetweenDigits, " ")
-            .replace(spaces, " ")
+            .replace(Patterns.dotNotBetweenDigits, " ")
+            .replace(Patterns.spaces, " ")
             .trim()
 
     private fun stripTags(s: String): String {
         var cur = s.trim()
         while (true) {
-            val next = tagTail.replace(cur, "").trim()
+            val next = Patterns.tagTail.replace(cur, "").trim()
             if (next == cur) return cur
             cur = next
         }
@@ -107,10 +125,23 @@ object FileNameParser {
     private fun tidy(s: String) = s.trim { it.isWhitespace() || it in "-–—:,._" }
 }
 
+/** Splits into alternating digit / non-digit runs (no regex). */
+private fun chunks(s: String): List<String> {
+    val out = ArrayList<String>()
+    var start = 0
+    for (i in 1..s.length) {
+        if (i == s.length || s[i].isDigit() != s[i - 1].isDigit()) {
+            if (i > start) out.add(s.substring(start, i))
+            start = i
+        }
+    }
+    return out
+}
+
 /** Case-insensitive "natural" order: "Ch 2" < "Ch 10". */
 fun naturalCompare(a: String, b: String): Int {
-    val ca = Regex("""\d+|\D+""").findAll(a).map { it.value }.toList()
-    val cb = Regex("""\d+|\D+""").findAll(b).map { it.value }.toList()
+    val ca = chunks(a)
+    val cb = chunks(b)
     for (i in 0 until minOf(ca.size, cb.size)) {
         val x = ca[i]
         val y = cb[i]
