@@ -228,7 +228,7 @@ private fun ReaderContent(
                     containerColor = Color.Black.copy(alpha = 0.85f),
                     titleContentColor = Color.White,
                     navigationIconContentColor = Color.White,
-                    actionContentColor = MaterialTheme.colorScheme.primary,
+                    actionIconContentColor = MaterialTheme.colorScheme.primary,
                 ),
             )
         }
