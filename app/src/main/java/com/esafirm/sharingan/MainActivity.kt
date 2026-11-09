@@ -27,11 +27,13 @@ import com.esafirm.sharingan.ui.LibraryScreen
 import com.esafirm.sharingan.ui.LibraryViewModel
 import com.esafirm.sharingan.ui.ReaderScreen
 import com.esafirm.sharingan.ui.SeriesScreen
+import com.esafirm.sharingan.ui.SettingsScreen
 import com.esafirm.sharingan.ui.SharinganTheme
 import kotlinx.coroutines.launch
 
 sealed interface Screen {
     data object Library : Screen
+    data object Settings : Screen
     data class Series(val key: String) : Screen
     data class Reader(val id: Long) : Screen
 }
@@ -83,6 +85,11 @@ class MainActivity : ComponentActivity() {
                         if (s.items.size == 1) openReader(s.items.first().manga.id) else stack.add(Screen.Series(s.key))
                     },
                     onResume = { openReader(it) },
+                    onOpenSettings = { stack.add(Screen.Settings) },
+                )
+                Screen.Settings -> SettingsScreen(
+                    settings = (application as SharinganApp).settings,
+                    onBack = { pop() },
                 )
                 is Screen.Series -> SeriesScreen(
                     vm = vm,

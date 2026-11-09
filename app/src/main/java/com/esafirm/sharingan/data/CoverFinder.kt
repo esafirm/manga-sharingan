@@ -17,36 +17,15 @@ data class CoverResult(
 
 /** Looks up manga covers on AniList (free, no API key). Network failures throw [IOException]. */
 object CoverFinder {
-    private const val ENDPOINT = "https://graphql.anilist.co"
     private const val GQL =
         "query (\$q: String) { Page(perPage: 12) { media(search: \$q, type: MANGA, sort: SEARCH_MATCH) " +
             "{ title { romaji english } startDate { year } format coverImage { large } } } }"
 
-    suspend fun search(query: String): List<CoverResult> = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("query", GQL)
-            .put("variables", JSONObject().put("q", query))
-            .toString()
-        val conn = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 8000
-            readTimeout = 10000
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("Accept", "application/json")
-        }
-        try {
-            conn.outputStream.use { it.write(body.toByteArray()) }
-            if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            parse(text)
-        } finally {
-            conn.disconnect()
-        }
-    }
+    suspend fun search(query: String): List<CoverResult> =
+        parse(AniList.query(GQL, JSONObject().put("q", query)))
 
-    private fun parse(json: String): List<CoverResult> {
-        val media = JSONObject(json).getJSONObject("data").getJSONObject("Page").getJSONArray("media")
+    private fun parse(root: JSONObject): List<CoverResult> {
+        val media = root.getJSONObject("data").getJSONObject("Page").getJSONArray("media")
         return (0 until media.length()).mapNotNull { i ->
             val m = media.getJSONObject(i)
             val url = m.optJSONObject("coverImage")?.optString("large").orEmpty()

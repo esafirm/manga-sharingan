@@ -99,6 +99,9 @@ fun SeriesScreen(vm: LibraryViewModel, key: String, onBack: () -> Unit, onOpen: 
             items(series.items, key = { it.manga.id }) { item ->
                 ChapterRow(item, vm, onClick = { onOpen(item.manga.id) })
             }
+            item(key = "similar") {
+                SimilarSection(series, vm, Modifier.padding(top = 16.dp))
+            }
         }
     }
 

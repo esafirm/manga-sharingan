@@ -93,6 +93,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.esafirm.sharingan.SharinganApp
 import com.esafirm.sharingan.data.Manga
 import com.esafirm.sharingan.data.MangaRepository
 import com.esafirm.sharingan.data.SeriesItem
@@ -161,6 +162,12 @@ private fun ReaderContent(
     val pageNow by rememberUpdatedState(page)
     val docNow by rememberUpdatedState(doc)
 
+    // Fast-scroll hold time / on-off come from Settings (read once per reading session).
+    val fastScrollHoldMs = remember {
+        val settings = (context.applicationContext as SharinganApp).settings
+        if (settings.fastScrollEnabled) settings.fastScrollHoldMs.toLong() else null
+    }
+
     // Long-press-and-drag "fast scroll" for the continuous reader.
     val scroller = remember(listState, count, doc) {
         FastScroller(listState, count) { i -> listState.layoutInfo.viewportSize.width * (doc?.ratio(i) ?: 1.4f) }
@@ -203,7 +210,7 @@ private fun ReaderContent(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (mode == ReadMode.SCROLL) {
-            ScrollPages(doc, count, listState, scroller, onTap = { showBars = !showBars }) {
+            ScrollPages(doc, count, listState, scroller, fastScrollHoldMs, onTap = { showBars = !showBars }) {
                 Column(
                     Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 48.dp).navigationBarsPadding(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -300,14 +307,16 @@ private fun ScrollPages(
     count: Int,
     state: LazyListState,
     scroller: FastScroller,
+    fastScrollHoldMs: Long?,
     onTap: () -> Unit,
     footer: @Composable () -> Unit,
 ) {
     val zoom = remember { ZoomState() }
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
-    val fastScroll = remember(scroller, haptic) {
-        FastScrollHandler(
+    val fastScroll = remember(scroller, haptic, fastScrollHoldMs) {
+        if (fastScrollHoldMs == null) null else FastScrollHandler(
+            holdMillis = fastScrollHoldMs,
             onStart = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 scroller.start()
@@ -519,7 +528,7 @@ private fun Modifier.zoomable(
                 val handler = fast
                 if (handler != null) {
                     // Wait for a long press: one finger that stays put until the timeout.
-                    val interrupted: PointerEvent? = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                    val interrupted: PointerEvent? = withTimeoutOrNull(handler.holdMillis) {
                         var result: PointerEvent? = null
                         var moved = 0f
                         while (result == null) {
@@ -558,6 +567,7 @@ private fun Modifier.zoomable(
 }
 
 private class FastScrollHandler(
+    val holdMillis: Long,
     val onStart: () -> Unit,
     val onDrag: (Float) -> Unit,
     val onEnd: () -> Unit,

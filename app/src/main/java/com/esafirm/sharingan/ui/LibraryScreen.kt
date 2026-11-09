@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -87,6 +88,7 @@ fun LibraryScreen(
     gridState: LazyGridState,
     onOpenSeries: (Series) -> Unit,
     onResume: (Long) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val all by vm.allSeries.collectAsState()
     val shown by vm.shown.collectAsState()
@@ -94,6 +96,8 @@ fun LibraryScreen(
     val filter by vm.filter.collectAsState()
     val query by vm.query.collectAsState()
     val importing by vm.importing.collectAsState()
+    val suggestions by vm.shelfSuggestions.collectAsState()
+    val showSuggestions by vm.showSuggestions.collectAsState()
     val haptic = LocalHapticFeedback.current
 
     var searching by remember { mutableStateOf(false) }
@@ -114,6 +118,7 @@ fun LibraryScreen(
             LargeTopAppBar(
                 title = { Text("Sharingan", fontWeight = FontWeight.Bold) },
                 actions = {
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, "Settings") }
                     IconButton(onClick = {
                         searching = !searching
                         if (!searching) vm.query.value = ""
@@ -214,6 +219,19 @@ fun LibraryScreen(
                                 }
                                 DropdownMenuItem({ Text("Delete") }, { menuFor = null; deleting = s })
                             }
+                        }
+                    }
+                    if (showSuggestions && suggestions.isNotEmpty() && query.isBlank() && filter == null) {
+                        item(key = "suggested", span = { GridItemSpan(maxLineSpan) }) {
+                            SuggestionsSection(
+                                title = "Suggested for you",
+                                hint = "Similar to what you've been reading · from AniList",
+                                items = suggestions,
+                                loading = false,
+                                failed = false,
+                                onRetry = {},
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
                         }
                     }
                 }

@@ -8,9 +8,13 @@ import androidx.lifecycle.viewModelScope
 import com.esafirm.sharingan.SharinganApp
 import com.esafirm.sharingan.data.Manga
 import com.esafirm.sharingan.data.ReadStatus
+import com.esafirm.sharingan.data.Suggestion
+import com.esafirm.sharingan.data.SuggestionFinder
+import com.esafirm.sharingan.data.excludingLibrary
 import com.esafirm.sharingan.data.Series
 import com.esafirm.sharingan.data.buildSeries
 import com.esafirm.sharingan.data.naturalCompare
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.io.File
 
 enum class SortMode(val label: String) {
     RECENT_READ("Recently read"),
@@ -63,6 +68,59 @@ class LibraryViewModel(private val app: Application) : AndroidViewModel(app) {
         }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val settings = (app as SharinganApp).settings
+    private val finder = SuggestionFinder(File(app.cacheDir, "suggestions"))
+
+    val showSuggestions: StateFlow<Boolean> = settings.showSuggestions
+
+    private val shelfRaw = MutableStateFlow<List<Suggestion>>(emptyList())
+
+    /** "Suggested for you" on the shelf: similar titles to what you read lately, minus what you own. */
+    val shelfSuggestions: StateFlow<List<Suggestion>> =
+        combine(shelfRaw, allSeries) { raw, all -> raw.excludingLibrary(all.orEmpty()) }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Similar manga for one series (throws IOException when offline). */
+    suspend fun similar(series: Series): List<Suggestion> =
+        finder.similarTo(series.title, series.key).excludingLibrary(allSeries.value.orEmpty())
+
+    private fun shelfSeeds(list: List<Series>): List<Pair<String, String>> =
+        list.filter { it.lastReadAt > 0 }.sortedByDescending { it.lastReadAt }.take(3)
+            .ifEmpty { list.sortedByDescending { it.addedAt }.take(2) }
+            .map { it.key to it.title }
+
+    private suspend fun loadShelf(seeds: List<Pair<String, String>>): List<Suggestion> {
+        val lists = seeds.map { (key, title) ->
+            try {
+                finder.similarTo(title, key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList() // offline etc.: just show fewer suggestions
+            }
+        }
+        // Interleave so every seed gets a fair share of the row.
+        val out = ArrayList<Suggestion>()
+        var i = 0
+        while (out.size < 24 && lists.any { i < it.size }) {
+            lists.forEach { l -> l.getOrNull(i)?.let { out.add(it) } }
+            i++
+        }
+        return out.distinctBy { it.id }.take(16)
+    }
+
+    init {
+        viewModelScope.launch {
+            combine(
+                allSeries.filterNotNull().map { shelfSeeds(it) }.distinctUntilChanged(),
+                settings.showSuggestions,
+            ) { seeds, on -> if (on) seeds else emptyList() }
+                .distinctUntilChanged()
+                .collectLatest { seeds -> shelfRaw.value = if (seeds.isEmpty()) emptyList() else loadShelf(seeds) }
+        }
+    }
 
     init {
         // Automatically look up covers for any series we haven't checked yet.
