@@ -37,8 +37,9 @@ and AAB → verifies the APK signature → publishes a GitHub Release with the A
 | No dependency-info blob in APK/AAB | `dependenciesInfo { ... }` |
 | Gradle build cache + parallel | `gradle.properties` |
 
-CI (`ci.yml`) also builds the unsigned release variant on every push so an R8 problem is caught
-before tagging.
+The optimized build is **on demand**, not part of every push. To check R8 without publishing:
+*Actions → CI → Run workflow* and tick **release_build** (builds the unsigned release variant and
+reports debug vs release APK sizes). Normal pushes only build the debug APK and run the unit tests.
 
 ## Debug builds and the committed debug key
 

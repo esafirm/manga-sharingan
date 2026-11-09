@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_build:
+        description: "Also build the optimized (R8, unsigned) release variant and report APK sizes"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -49,11 +54,14 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --console=plain 2>&1 | tee -a build.log
 
-      # Unsigned, but fully minified/optimized: proves R8 + resource shrinking succeed on every push.
+      # On demand only (Actions -> CI -> Run workflow -> tick "release_build"): unsigned but fully
+      # minified/optimized, to check R8 + resource shrinking. Signed releases: see release.yml.
       - name: Build release (R8, unsigned)
+        if: github.event_name == 'workflow_dispatch' && inputs.release_build
         run: ./gradlew assembleRelease --console=plain 2>&1 | tee -a build.log
 
       - name: Size report
+        if: github.event_name == 'workflow_dispatch' && inputs.release_build
         run: |
           {
             echo "### APK sizes"
