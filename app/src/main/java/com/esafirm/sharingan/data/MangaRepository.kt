@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.IOException
+import java.io.InputStream
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -57,12 +58,19 @@ class MangaRepository(private val context: Context) {
      * Copies the PDF into app storage (so later opens are plain local file reads, with no
      * SAF round-trips), reads the page count and renders a small cover.
      */
-    suspend fun import(uri: Uri): Result<Manga> = withContext(Dispatchers.IO) {
+    suspend fun import(uri: Uri): Result<Manga> =
+        importFrom(title = { displayName(uri) }) { context.contentResolver.openInputStream(uri)!! }
+
+    /** Adds a PDF that's already on disk (e.g. one built by the web scraper) under [title]. */
+    suspend fun importFile(file: File, title: String): Result<Manga> =
+        importFrom(title = { title.trim().ifEmpty { file.nameWithoutExtension } }) { file.inputStream() }
+
+    private suspend fun importFrom(title: () -> String, open: () -> InputStream): Result<Manga> = withContext(Dispatchers.IO) {
         val fileName = "${UUID.randomUUID()}.pdf"
         val target = File(pdfDir, fileName)
         try {
             val digest = MessageDigest.getInstance("SHA-256")
-            context.contentResolver.openInputStream(uri)!!.use { raw ->
+            open().use { raw ->
                 DigestInputStream(raw, digest).use { input ->
                     target.outputStream().use { input.copyTo(it, 256 * 1024) }
                 }
@@ -81,7 +89,7 @@ class MangaRepository(private val context: Context) {
             }
             require(pages > 0) { "PDF has no pages" }
             val manga = Manga(
-                title = displayName(uri),
+                title = title(),
                 fileName = fileName,
                 coverName = coverName.takeIf { File(coverDir, it).exists() },
                 pageCount = pages,

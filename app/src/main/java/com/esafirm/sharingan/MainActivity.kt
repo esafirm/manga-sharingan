@@ -26,6 +26,8 @@ import com.esafirm.sharingan.data.nextAfter
 import com.esafirm.sharingan.ui.LibraryScreen
 import com.esafirm.sharingan.ui.LibraryViewModel
 import com.esafirm.sharingan.ui.ReaderScreen
+import com.esafirm.sharingan.ui.ScraperScreen
+import com.esafirm.sharingan.ui.ScraperViewModel
 import com.esafirm.sharingan.ui.SeriesScreen
 import com.esafirm.sharingan.ui.SettingsScreen
 import com.esafirm.sharingan.ui.SharinganTheme
@@ -34,6 +36,7 @@ import kotlinx.coroutines.launch
 sealed interface Screen {
     data object Library : Screen
     data object Settings : Screen
+    data object Scraper : Screen
     data class Series(val key: String) : Screen
     data class Reader(val id: Long) : Screen
 }
@@ -41,6 +44,7 @@ sealed interface Screen {
 class MainActivity : ComponentActivity() {
     private val repo get() = (application as SharinganApp).repo
     private val vm: LibraryViewModel by viewModels()
+    private val scraperVm: ScraperViewModel by viewModels()
     private val stack = mutableStateListOf<Screen>(Screen.Library)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +65,10 @@ class MainActivity : ComponentActivity() {
 
     private fun openReader(id: Long) {
         if (stack.last() is Screen.Reader) stack[stack.lastIndex] = Screen.Reader(id) else stack.add(Screen.Reader(id))
+    }
+
+    private fun openScraper() {
+        if (stack.last() != Screen.Scraper) stack.add(Screen.Scraper)
     }
 
     @Composable
@@ -86,10 +94,16 @@ class MainActivity : ComponentActivity() {
                     },
                     onResume = { openReader(it) },
                     onOpenSettings = { stack.add(Screen.Settings) },
+                    onOpenScraper = { openScraper() },
                 )
                 Screen.Settings -> SettingsScreen(
                     settings = (application as SharinganApp).settings,
                     onBack = { pop() },
+                )
+                Screen.Scraper -> ScraperScreen(
+                    vm = scraperVm,
+                    onBack = { pop() },
+                    onRead = { openReader(it) },
                 )
                 is Screen.Series -> SeriesScreen(
                     vm = vm,
@@ -108,9 +122,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** PDFs sent from Telegram (or any app) via "Open with" or "Share". */
+    /** PDFs sent from Telegram (or any app) via "Open with" or "Share"; links shared from a browser go to the scraper. */
     private fun handleIncoming(intent: Intent?) {
         intent ?: return
+        if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("text/") == true) {
+            val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_TEXT), intent.getStringExtra(Intent.EXTRA_SUBJECT)).joinToString("\n")
+            if (ScraperViewModel.extractLinks(text).isEmpty()) {
+                Toast.makeText(this, "No link found in what was shared", Toast.LENGTH_SHORT).show()
+                return
+            }
+            scraperVm.prefill(text)
+            openScraper()
+            return
+        }
         val uris: List<Uri> = when (intent.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
             Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))

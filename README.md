@@ -6,12 +6,21 @@ A fast, minimal Android manga (PDF) reader.
 - **Reader**: swipe pages (RTL/LTR toggle), pinch / double-tap zoom, page slider, tap to toggle UI.
 - **Resume**: last page saved on every page turn; reopening jumps straight to it.
 - **Status**: Unread / Reading / Completed, updated automatically and overridable by long-press.
+- **Download from web**: paste chapter links (⋮ → *Download from web…*, or share a link from the browser). The page images are detected, downloaded and packed into a PDF on your shelf. Only download content you have the right to.
 
 ## Why it's fast
 - PDFs are copied once into app storage; page count + cover are computed at import.
 - Reader opens directly on the saved page (page count is in the DB, no waiting on the PDF).
 - Platform `PdfRenderer` (no native libs), renders on a background dispatcher, serialised by a mutex.
 - LRU bitmap cache + prefetch of neighbouring pages; stale renders are cancelled when you flick past.
+
+## Web scraper
+`data/scraper/` turns a chapter web page into a PDF:
+- `HtmlImageExtractor` reads `<img>` tags (lazy-load `data-src`/`srcset` first), keeps the biggest group of images sharing one directory (the chapter's pages, not logos/ads), and falls back to image URLs inside `<script>` for JS-built readers. An optional "image URL contains…" filter overrides the guess.
+- `WebScraper` downloads 4 images at a time (with the page as `Referer`, retries), keeps plain JPEGs byte-for-byte, re-encodes PNG/WebP/AVIF, and cuts long webtoon strips into screen-sized pages.
+- `ImagePdfWriter` embeds the JPEGs directly (`/DCTDecode`), so the PDF is about the size of the images and nothing is re-compressed.
+
+Pages rendered entirely by JavaScript after load can't be read (no WebView).
 
 ## Build
 Requires **Android 16 (API 36) or newer** on the device. Open in Android Studio, or run `./gradlew assembleDebug` (JDK 17, Android SDK 37).

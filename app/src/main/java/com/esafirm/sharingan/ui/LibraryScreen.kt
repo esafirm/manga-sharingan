@@ -48,6 +48,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.LinearProgressIndicator
@@ -89,6 +90,7 @@ fun LibraryScreen(
     onOpenSeries: (Series) -> Unit,
     onResume: (Long) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenScraper: () -> Unit,
 ) {
     val all by vm.allSeries.collectAsState()
     val shown by vm.shown.collectAsState()
@@ -126,8 +128,13 @@ fun LibraryScreen(
                         Icon(if (searching) Icons.Default.Close else Icons.Default.Search, "Search")
                     }
                     Box {
-                        IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.MoreVert, "Sort") }
+                        IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.MoreVert, "More") }
                         DropdownMenu(sortMenu, { sortMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Download from web…") },
+                                onClick = { sortMenu = false; onOpenScraper() },
+                            )
+                            HorizontalDivider()
                             SortMode.entries.forEach { mode ->
                                 DropdownMenuItem(
                                     text = { Text(mode.label, fontWeight = if (mode == sort) FontWeight.Bold else FontWeight.Normal) },
@@ -274,7 +281,7 @@ private fun EmptyShelf() {
         Text("Your shelf is empty", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tap “Add manga” to pick PDFs, or share them straight from Telegram.\nVolumes of the same series group together automatically.",
+            "Tap “Add manga” to pick PDFs, share them straight from Telegram, or download chapters from the web (⋮ menu).\nVolumes of the same series group together automatically.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.outline,
         )

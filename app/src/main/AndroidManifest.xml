@@ -30,6 +30,12 @@
                 <data android:scheme="file" />
                 <data android:mimeType="application/pdf" />
             </intent-filter>
+            <!-- "Share" a chapter link from the browser: download it with the web scraper -->
+            <intent-filter android:label="@string/share_to_scraper">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
             <!-- "Share" to this app (one or many PDFs) -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
