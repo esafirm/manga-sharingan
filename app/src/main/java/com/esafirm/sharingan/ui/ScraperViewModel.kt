@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.esafirm.sharingan.SharinganApp
+import com.esafirm.sharingan.data.scraper.RenderMode
 import com.esafirm.sharingan.data.scraper.ScanResult
+import com.esafirm.sharingan.data.scraper.WebViewRenderer
 import com.esafirm.sharingan.data.scraper.WebScraper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -40,12 +42,16 @@ data class ScrapeJob(
 class ScraperViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = (app as SharinganApp).repo
     private val workDir = File(app.cacheDir, "scraper").apply { deleteRecursively(); mkdirs() } // drop leftovers
-    private val scraper = WebScraper(workDir)
+    /** Browser engine for JavaScript-built readers; its WebView is shown on screen while it works. */
+    val renderer = WebViewRenderer(app)
+    private val scraper = WebScraper(workDir, renderer)
 
     /** Links typed/pasted/shared in, one per line. Lives here so it survives leaving the screen. */
     val input = MutableStateFlow("")
     /** Optional "image URL contains…" override when the automatic page detection guesses wrong. */
     val filter = MutableStateFlow("")
+    /** Skip the plain-HTML attempt and always load pages in the browser engine. */
+    val alwaysRender = MutableStateFlow(false)
 
     private val _jobs = MutableStateFlow<List<ScrapeJob>>(emptyList())
     val jobs: StateFlow<List<ScrapeJob>> = _jobs.asStateFlow()
@@ -82,9 +88,10 @@ class ScraperViewModel(app: Application) : AndroidViewModel(app) {
     private fun scan(id: Long) {
         val url = find(id)?.url ?: return
         val f = filter.value
+        val mode = if (alwaysRender.value) RenderMode.ALWAYS else RenderMode.AUTO
         running[id] = viewModelScope.launch {
             try {
-                val result = scraper.scan(url, f)
+                val result = scraper.scan(url, f, mode)
                 edit(id) {
                     it.copy(
                         status = if (result.images.isEmpty()) ScrapeStatus.EMPTY else ScrapeStatus.READY,
@@ -137,6 +144,12 @@ class ScraperViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearFinished() = _jobs.update { list -> list.filterNot { it.status == ScrapeStatus.DONE } }
+
+    fun imageHeaders(url: String, referer: String) = scraper.imageHeaders(url, referer)
+
+    override fun onCleared() {
+        renderer.destroy()
+    }
 
     private fun find(id: Long) = _jobs.value.firstOrNull { it.id == id }
 

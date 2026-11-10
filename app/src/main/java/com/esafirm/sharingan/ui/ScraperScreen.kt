@@ -55,7 +55,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.esafirm.sharingan.data.scraper.WebScraper
+import android.view.ViewGroup
+import androidx.compose.material3.Switch
+import androidx.compose.ui.viewinterop.AndroidView
 
 /** Paste chapter links → see which pages were found → download them as PDFs into the library. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -64,7 +66,9 @@ fun ScraperScreen(vm: ScraperViewModel, onBack: () -> Unit, onRead: (Long) -> Un
     val input by vm.input.collectAsState()
     val filter by vm.filter.collectAsState()
     val jobs by vm.jobs.collectAsState()
-    var advanced by rememberSaveable { mutableStateOf(filter.isNotEmpty()) }
+    val alwaysRender by vm.alwaysRender.collectAsState()
+    val rendering by vm.renderer.active.collectAsState()
+    var advanced by rememberSaveable { mutableStateOf(filter.isNotEmpty() || vm.alwaysRender.value) }
     val ready = jobs.count { it.status == ScrapeStatus.READY }
 
     Scaffold(
@@ -78,78 +82,97 @@ fun ScraperScreen(vm: ScraperViewModel, onBack: () -> Unit, onRead: (Long) -> Un
             )
         },
     ) { pad ->
-        LazyColumn(
-            Modifier.padding(pad).fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item(key = "input") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { vm.input.value = it },
-                        label = { Text("Chapter links") },
-                        placeholder = { Text("https://…\nOne chapter per line") },
-                        minLines = 2,
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { advanced = !advanced }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "Image filter (optional)",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Icon(if (advanced) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null)
-                    }
-                    AnimatedVisibility(advanced) {
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item(key = "input") {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
-                            value = filter,
-                            onValueChange = { vm.filter.value = it },
-                            singleLine = true,
-                            label = { Text("Image URL contains") },
-                            supportingText = {
-                                Text("Pages are detected automatically. If the wrong images are picked, type part of the page images' address (e.g. “/chapters/”) and scan again.")
-                            },
+                            value = input,
+                            onValueChange = { vm.input.value = it },
+                            label = { Text("Chapter links") },
+                            placeholder = { Text("https://…\nOne chapter per line") },
+                            minLines = 2,
+                            maxLines = 6,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = vm::scanInput, enabled = input.isNotBlank()) { Text("Find pages") }
-                        if (ready > 1) FilledTonalButton(onClick = vm::downloadAll) { Text("Download all ($ready)") }
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { advanced = !advanced }.padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "Advanced options",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Icon(if (advanced) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null)
+                        }
+                        AnimatedVisibility(advanced) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Always run JavaScript", style = MaterialTheme.typography.bodyLarge)
+                                        Text(
+                                            "Load every link in the built-in browser. Otherwise it's only used when the plain page has too few images.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.outline,
+                                        )
+                                    }
+                                    Switch(alwaysRender, { vm.alwaysRender.value = it })
+                                }
+                                OutlinedTextField(
+                                    value = filter,
+                                    onValueChange = { vm.filter.value = it },
+                                    singleLine = true,
+                                    label = { Text("Image URL contains") },
+                                    supportingText = {
+                                        Text("Pages are detected automatically. If the wrong images are picked, type part of the page images' address (e.g. “/chapters/”) and scan again.")
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = vm::scanInput, enabled = input.isNotBlank()) { Text("Find pages") }
+                            if (ready > 1) FilledTonalButton(onClick = vm::downloadAll) { Text("Download all ($ready)") }
+                        }
                     }
                 }
-            }
 
-            if (jobs.isEmpty()) {
-                item(key = "hint") {
-                    Text(
-                        "Paste the link of a chapter's reading page (or share it here from your browser). " +
-                            "The page images are downloaded, packed into a PDF and added to your shelf. " +
-                            "Name chapters like “Title - Ch. 12” so they group into one series.\n\n" +
-                            "Only download what you have the right to. Sites that load pages purely with JavaScript can't be read.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 8.dp),
+                if (jobs.isEmpty()) {
+                    item(key = "hint") {
+                        Text(
+                            "Paste the link of a chapter's reading page (or share it here from your browser). " +
+                                "The page images are downloaded, packed into a PDF and added to your shelf. " +
+                                "Name chapters like “Title - Ch. 12” so they group into one series.\n\n" +
+                                "Pages built with JavaScript are opened in a built-in browser first; if a site asks you to verify you're human, do it there.\n\n" +
+                                "Only download what you have the right to.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+
+                items(jobs.asReversed(), key = { it.id }) { job ->
+                    JobCard(
+                        job = job,
+                        onTitle = { vm.setTitle(job.id, it) },
+                        onDownload = { vm.download(job.id) },
+                        onRetry = { if (job.scan == null || job.status == ScrapeStatus.EMPTY) vm.rescan(job.id) else vm.download(job.id) },
+                        onRemove = { vm.remove(job.id) },
+                        onRead = { job.mangaId?.let(onRead) },
+                        headers = vm::imageHeaders,
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
-
-            items(jobs.asReversed(), key = { it.id }) { job ->
-                JobCard(
-                    job = job,
-                    onTitle = { vm.setTitle(job.id, it) },
-                    onDownload = { vm.download(job.id) },
-                    onRetry = { if (job.scan == null || job.status == ScrapeStatus.EMPTY) vm.rescan(job.id) else vm.download(job.id) },
-                    onRemove = { vm.remove(job.id) },
-                    onRead = { job.mangaId?.let(onRead) },
-                    modifier = Modifier.animateItem(),
-                )
-            }
+            // Outside the list so it stays attached (and keeps running) however far the list is scrolled.
+            rendering?.let { url -> BrowserCard(vm, url, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
         }
     }
 }
@@ -162,6 +185,7 @@ private fun JobCard(
     onRetry: () -> Unit,
     onRemove: () -> Unit,
     onRead: () -> Unit,
+    headers: (url: String, referer: String) -> Map<String, String>,
     modifier: Modifier = Modifier,
 ) {
     Card(modifier.fillMaxWidth()) {
@@ -192,7 +216,7 @@ private fun JobCard(
             }
 
             job.scan?.takeIf { it.images.isNotEmpty() }?.let { scan ->
-                Thumbnails(scan.images, scan.pageUrl)
+                Thumbnails(scan.images, scan.pageUrl, headers)
             }
 
             when (job.status) {
@@ -202,11 +226,15 @@ private fun JobCard(
                     Text("Looking for pages…")
                 }
                 ScrapeStatus.READY -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("${job.total} pages found", Modifier.weight(1f), fontWeight = FontWeight.Medium)
+                    Text(
+                        "${job.total} pages found" + if (job.scan?.rendered == true) " · via browser" else "",
+                        Modifier.weight(1f),
+                        fontWeight = FontWeight.Medium,
+                    )
                     Button(onDownload) { Text("Download") }
                 }
                 ScrapeStatus.EMPTY -> StatusLine(
-                    "No page images found. Try the image filter, or the site may load pages with JavaScript.",
+                    "No page images found. Try “Always run JavaScript” or the image filter in Advanced options.",
                     error = true,
                     action = "Scan again",
                     onAction = onRetry,
@@ -257,15 +285,14 @@ private fun StatusLine(text: String, error: Boolean, action: String, onAction: (
 
 /** First few detected pages, so a wrong guess (ads, thumbnails) is obvious before downloading. */
 @Composable
-private fun Thumbnails(images: List<String>, referer: String) {
+private fun Thumbnails(images: List<String>, referer: String, headers: (String, String) -> Map<String, String>) {
     val context = LocalContext.current
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         items(images.take(8)) { url ->
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(url)
-                    .addHeader("Referer", referer)
-                    .addHeader("User-Agent", WebScraper.USER_AGENT)
+                    .apply { headers(url, referer).forEach { (k, v) -> addHeader(k, v) } }
                     .crossfade(true)
                     .build(),
                 contentDescription = null,
@@ -284,6 +311,39 @@ private fun Thumbnails(images: List<String>, referer: String) {
                     contentAlignment = Alignment.Center,
                 ) { Text("+${images.size - 8}", style = MaterialTheme.typography.labelLarge) }
             }
+        }
+    }
+}
+
+/** The live browser while a JavaScript page loads: watch it scroll, or tap through a verification. */
+@Composable
+private fun BrowserCard(vm: ScraperViewModel, url: String, modifier: Modifier = Modifier) {
+    Card(modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Running the page's JavaScript…", fontWeight = FontWeight.Medium)
+                    Text(
+                        url,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                TextButton(vm.renderer::grabNow) { Text("Use now") }
+            }
+            AndroidView(
+                factory = { vm.renderer.webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                modifier = Modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(8.dp)),
+            )
+            Text(
+                "Scrolls through the page so every image loads. If the site asks you to verify, do it here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
         }
     }
 }

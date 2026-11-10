@@ -20,7 +20,9 @@ A fast, minimal Android manga (PDF) reader.
 - `WebScraper` downloads 4 images at a time (with the page as `Referer`, retries), keeps plain JPEGs byte-for-byte, re-encodes PNG/WebP/AVIF, and cuts long webtoon strips into screen-sized pages.
 - `ImagePdfWriter` embeds the JPEGs directly (`/DCTDecode`), so the PDF is about the size of the images and nothing is re-compressed.
 
-Pages rendered entirely by JavaScript after load can't be read (no WebView).
+- `WebViewRenderer` handles JavaScript readers: when the plain HTML has fewer than 5 pages (or the site blocks plain requests), the chapter is loaded in a WebView shown on the scraper screen. It waits out "checking your browser" interstitials (you can tap through a verification there), scrolls to the bottom so lazy loaders fill every image, then hands the live DOM to the extractor. Downloads reuse the WebView's user agent and cookies. *Advanced options → Always run JavaScript* skips the plain attempt.
+
+Readers that draw pages onto a `<canvas>` (or serve them as `blob:` URLs) still can't be scraped.
 
 ## Build
 Requires **Android 16 (API 36) or newer** on the device. Open in Android Studio, or run `./gradlew assembleDebug` (JDK 17, Android SDK 37).

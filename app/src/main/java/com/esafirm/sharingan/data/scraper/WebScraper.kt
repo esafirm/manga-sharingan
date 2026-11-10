@@ -6,6 +6,7 @@ import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
+import android.webkit.CookieManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -26,7 +27,20 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
 /** A scanned chapter page: where it was found and the images that look like its pages. */
-data class ScanResult(val pageUrl: String, val title: String?, val images: List<String>)
+data class ScanResult(
+    val pageUrl: String,
+    val title: String?,
+    val images: List<String>,
+    /** True if the pages came from the browser engine (JavaScript ran), false for the plain HTML. */
+    val rendered: Boolean = false,
+)
+
+enum class RenderMode {
+    /** Plain HTML first; the browser engine only if that finds too few pages or is blocked. */
+    AUTO,
+    /** Always load with the browser engine. */
+    ALWAYS,
+}
 
 /** A finished download: the PDF (in the scraper's work dir, caller moves/deletes it) and pages that failed. */
 data class ScrapedPdf(val file: File, val pages: Int, val skipped: Int)
@@ -36,18 +50,55 @@ data class ScrapedPdf(val file: File, val pages: Int, val skipped: Int)
  * ([HtmlImageExtractor]), download them a few at a time, normalise each to a JPEG
  * (long webtoon strips are cut into screen-sized pages) and pack them with [ImagePdfWriter].
  *
- * Only plain HTML is read; pages rendered entirely by JavaScript after load show no images.
+ * Pages built by JavaScript are loaded in a [WebViewRenderer] first. Downloads reuse its user
+ * agent and cookies, so a site that let the browser in (e.g. after a challenge) lets them in too.
  */
-class WebScraper(private val workDir: File) {
+class WebScraper(private val workDir: File, private val renderer: WebViewRenderer) {
 
-    suspend fun scan(url: String, filter: String? = null): ScanResult = withContext(Dispatchers.IO) {
-        val (finalUrl, html) = fetchHtml(normalizeUrl(url))
-        val page = HtmlImageExtractor.extract(html, finalUrl, filter)
-        ScanResult(finalUrl, page.title, page.images)
+    suspend fun scan(url: String, filter: String? = null, mode: RenderMode = RenderMode.AUTO): ScanResult {
+        val target = normalizeUrl(url)
+        warmUp()
+        var plain: ScanResult? = null
+        var plainError: Throwable? = null
+        if (mode == RenderMode.AUTO) {
+            try {
+                plain = withContext(Dispatchers.IO) {
+                    val (finalUrl, html) = fetchHtml(target)
+                    val page = HtmlImageExtractor.extract(html, finalUrl, filter)
+                    ScanResult(finalUrl, page.title, page.images, rendered = false)
+                }
+                if (plain.images.size >= ENOUGH_PLAIN_PAGES) return plain
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                plainError = e // blocked (403/503 bot check) or similar: the browser engine may get in
+            }
+        }
+        val rendered = try {
+            val page = renderer.render(target)
+            val found = withContext(Dispatchers.Default) { HtmlImageExtractor.extract(page.html, page.url, filter) }
+            ScanResult(page.url, found.title, found.images, rendered = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            plain ?: throw (plainError ?: e)
+        }
+        return if (plain != null && plain.images.size > rendered.images.size) plain else rendered
     }
 
-    suspend fun download(scan: ScanResult, onProgress: (done: Int, total: Int) -> Unit): ScrapedPdf =
-        withContext(Dispatchers.IO) {
+    /** Headers an image request needs to look like it came from the page (thumbnails use these too). */
+    fun imageHeaders(url: String, referer: String): Map<String, String> = buildMap {
+        put("User-Agent", renderer.userAgent)
+        put("Referer", referer)
+        cookieFor(url)?.let { put("Cookie", it) }
+    }
+
+    private fun cookieFor(url: String): String? =
+        runCatching { CookieManager.getInstance().getCookie(url) }.getOrNull()?.takeIf { it.isNotBlank() }
+
+    suspend fun download(scan: ScanResult, onProgress: (done: Int, total: Int) -> Unit): ScrapedPdf {
+        warmUp()
+        return withContext(Dispatchers.IO) {
             require(scan.images.isNotEmpty()) { "No images found on this page" }
             val dir = File(workDir, UUID.randomUUID().toString()).apply { mkdirs() }
             try {
@@ -77,6 +128,10 @@ class WebScraper(private val workDir: File) {
                 dir.deleteRecursively()
             }
         }
+    }
+
+    /** The WebView user agent is looked up on the main thread once, before any background request needs it. */
+    private suspend fun warmUp() = withContext(Dispatchers.Main) { renderer.userAgent }
 
     // ---- Network -------------------------------------------------------------------------
 
@@ -117,7 +172,8 @@ class WebScraper(private val workDir: File) {
             connectTimeout = 10_000
             readTimeout = 30_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("User-Agent", renderer.userAgent)
+            cookieFor(url)?.let { setRequestProperty("Cookie", it) }
             setRequestProperty("Accept", accept)
             setRequestProperty("Accept-Language", "en;q=0.9,*;q=0.5")
             // Most image hosts refuse hotlinks without the chapter page as referer.
@@ -211,8 +267,8 @@ class WebScraper(private val workDir: File) {
     }
 
     companion object {
-        const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36"
+        /** Fewer pages than this in the plain HTML → probably a JS reader, try the browser engine. */
+        private const val ENOUGH_PLAIN_PAGES = 5
         private const val PARALLEL = 4
         private const val MAX_HTML = 8 * 1024 * 1024
         private const val MAX_IMAGE = 40 * 1024 * 1024
