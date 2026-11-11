@@ -6,8 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.esafirm.sharingan.SharinganApp
 import com.esafirm.sharingan.data.scraper.RenderMode
 import com.esafirm.sharingan.data.scraper.ScanResult
-import com.esafirm.sharingan.data.scraper.WebViewRenderer
-import com.esafirm.sharingan.data.scraper.WebScraper
+import com.esafirm.sharingan.data.source.MangaSource
+import com.esafirm.sharingan.data.source.SourceChapter
+import com.esafirm.sharingan.data.source.chapterFileTitle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.File
 import java.net.URL
 import java.net.UnknownHostException
 
@@ -35,16 +35,20 @@ data class ScrapeJob(
     val skipped: Int = 0,
     val error: String? = null,
     val mangaId: Long? = null,
+    /** Set for chapters picked from a source: pages are resolved through it right before downloading. */
+    val sourceId: String? = null,
+    val chapter: SourceChapter? = null,
 ) {
     val busy get() = status == ScrapeStatus.SCANNING || status == ScrapeStatus.QUEUED || status == ScrapeStatus.DOWNLOADING
 }
 
 class ScraperViewModel(app: Application) : AndroidViewModel(app) {
-    private val repo = (app as SharinganApp).repo
-    private val workDir = File(app.cacheDir, "scraper").apply { deleteRecursively(); mkdirs() } // drop leftovers
+    private val sharingan = app as SharinganApp
+    private val repo = sharingan.repo
     /** Browser engine for JavaScript-built readers; its WebView is shown on screen while it works. */
-    val renderer = WebViewRenderer(app)
-    private val scraper = WebScraper(workDir, renderer)
+    val renderer = sharingan.renderer
+    private val scraper = sharingan.scraper
+    private val sources = sharingan.sources
 
     /** Links typed/pasted/shared in, one per line. Lives here so it survives leaving the screen. */
     val input = MutableStateFlow("")
@@ -110,16 +114,53 @@ class ScraperViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setTitle(id: Long, title: String) = edit(id) { it.copy(title = title) }
 
+    /**
+     * Queues chapters picked from a source; each is downloaded as "[series] - Ch. N" so they group
+     * into one series on the shelf. Chapters already in the queue are skipped. Returns how many were added.
+     */
+    fun enqueue(source: MangaSource, series: String, chapters: List<SourceChapter>): Int {
+        val known = _jobs.value.filter { it.status != ScrapeStatus.FAILED }.map { it.url }.toSet()
+        val fresh = chapters.filterNot { it.url in known }
+        fresh.forEach { c ->
+            val job = ScrapeJob(
+                id = nextId++,
+                url = c.url,
+                status = ScrapeStatus.READY,
+                title = chapterFileTitle(series, c),
+                sourceId = source.id,
+                chapter = c,
+            )
+            _jobs.update { it + job }
+            download(job.id)
+        }
+        return fresh.size
+    }
+
+    /** What the retry button does: source chapters and scanned pages download again, failed scans rescan. */
+    fun retry(id: Long) {
+        val job = find(id) ?: return
+        if (job.chapter != null || (job.scan != null && job.status != ScrapeStatus.EMPTY)) download(id) else rescan(id)
+    }
+
     fun downloadAll() = _jobs.value.filter { it.status == ScrapeStatus.READY }.forEach { download(it.id) }
 
     fun download(id: Long) {
-        val job = find(id)?.takeIf { it.status == ScrapeStatus.READY || it.status == ScrapeStatus.FAILED && it.scan != null } ?: return
-        val scan = job.scan ?: return
+        val job = find(id)
+            ?.takeIf { it.status == ScrapeStatus.READY || it.status == ScrapeStatus.FAILED }
+            ?.takeIf { it.scan != null || it.chapter != null } ?: return
         edit(id) { it.copy(status = ScrapeStatus.QUEUED, error = null, done = 0) }
         running[id] = viewModelScope.launch {
             downloadLock.withLock {
                 edit(id) { it.copy(status = ScrapeStatus.DOWNLOADING) }
                 try {
+                    // Source chapters resolve their pages now: some image links (MangaDex) expire within minutes.
+                    val scan = if (job.chapter != null) {
+                        val source = job.sourceId?.let(sources::get) ?: error("That source was removed")
+                        source.pages(job.chapter).also { s -> edit(id) { it.copy(scan = s, total = s.images.size) } }
+                    } else {
+                        job.scan!!
+                    }
+                    if (scan.images.isEmpty()) error("No page images found on the chapter page")
                     val pdf = scraper.download(scan) { done, total -> edit(id) { it.copy(done = done, total = total) } }
                     try {
                         val title = find(id)?.title?.trim().orEmpty().ifEmpty { scan.title ?: hostOf(scan.pageUrl) }
@@ -146,10 +187,6 @@ class ScraperViewModel(app: Application) : AndroidViewModel(app) {
     fun clearFinished() = _jobs.update { list -> list.filterNot { it.status == ScrapeStatus.DONE } }
 
     fun imageHeaders(url: String, referer: String) = scraper.imageHeaders(url, referer)
-
-    override fun onCleared() {
-        renderer.destroy()
-    }
 
     private fun find(id: Long) = _jobs.value.firstOrNull { it.id == id }
 

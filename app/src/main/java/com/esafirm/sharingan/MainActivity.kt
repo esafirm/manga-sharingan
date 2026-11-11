@@ -25,6 +25,9 @@ import androidx.lifecycle.lifecycleScope
 import com.esafirm.sharingan.data.nextAfter
 import com.esafirm.sharingan.ui.LibraryScreen
 import com.esafirm.sharingan.ui.LibraryViewModel
+import com.esafirm.sharingan.ui.BrowseScreen
+import com.esafirm.sharingan.ui.BrowseViewModel
+import com.esafirm.sharingan.ui.ChaptersScreen
 import com.esafirm.sharingan.ui.ReaderScreen
 import com.esafirm.sharingan.ui.ScraperScreen
 import com.esafirm.sharingan.ui.ScraperViewModel
@@ -37,6 +40,8 @@ sealed interface Screen {
     data object Library : Screen
     data object Settings : Screen
     data object Scraper : Screen
+    data object Browse : Screen
+    data object Chapters : Screen
     data class Series(val key: String) : Screen
     data class Reader(val id: Long) : Screen
 }
@@ -45,6 +50,7 @@ class MainActivity : ComponentActivity() {
     private val repo get() = (application as SharinganApp).repo
     private val vm: LibraryViewModel by viewModels()
     private val scraperVm: ScraperViewModel by viewModels()
+    private val browseVm: BrowseViewModel by viewModels()
     private val stack = mutableStateListOf<Screen>(Screen.Library)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,6 +66,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pop() {
+        if (stack.last() == Screen.Chapters) browseVm.closeChapters()
         if (stack.size > 1) stack.removeAt(stack.lastIndex)
     }
 
@@ -69,6 +76,10 @@ class MainActivity : ComponentActivity() {
 
     private fun openScraper() {
         if (stack.last() != Screen.Scraper) stack.add(Screen.Scraper)
+    }
+
+    private fun push(screen: Screen) {
+        if (stack.last() != screen) stack.add(screen)
     }
 
     @Composable
@@ -94,11 +105,29 @@ class MainActivity : ComponentActivity() {
                     },
                     onResume = { openReader(it) },
                     onOpenSettings = { stack.add(Screen.Settings) },
-                    onOpenScraper = { openScraper() },
+                    onOpenScraper = { push(Screen.Browse) },
                 )
                 Screen.Settings -> SettingsScreen(
                     settings = (application as SharinganApp).settings,
                     onBack = { pop() },
+                )
+                Screen.Browse -> BrowseScreen(
+                    vm = browseVm,
+                    downloads = scraperVm,
+                    onBack = { pop() },
+                    onOpenSeries = { push(Screen.Chapters) },
+                    onOpenDownloads = { openScraper() },
+                )
+                Screen.Chapters -> ChaptersScreen(
+                    vm = browseVm,
+                    downloads = scraperVm,
+                    onBack = { pop() },
+                    onOpenDownloads = { openScraper() },
+                    onDownloadAsChapter = { url ->
+                        scraperVm.prefill(url)
+                        scraperVm.scanInput()
+                        openScraper()
+                    },
                 )
                 Screen.Scraper -> ScraperScreen(
                     vm = scraperVm,

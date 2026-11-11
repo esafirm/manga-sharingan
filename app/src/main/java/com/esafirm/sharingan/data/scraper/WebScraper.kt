@@ -26,22 +26,6 @@ import java.nio.charset.Charset
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
-/** A scanned chapter page: where it was found and the images that look like its pages. */
-data class ScanResult(
-    val pageUrl: String,
-    val title: String?,
-    val images: List<String>,
-    /** True if the pages came from the browser engine (JavaScript ran), false for the plain HTML. */
-    val rendered: Boolean = false,
-)
-
-enum class RenderMode {
-    /** Plain HTML first; the browser engine only if that finds too few pages or is blocked. */
-    AUTO,
-    /** Always load with the browser engine. */
-    ALWAYS,
-}
-
 /** A finished download: the PDF (in the scraper's work dir, caller moves/deletes it) and pages that failed. */
 data class ScrapedPdf(val file: File, val pages: Int, val skipped: Int)
 
@@ -55,19 +39,36 @@ data class ScrapedPdf(val file: File, val pages: Int, val skipped: Int)
  */
 class WebScraper(private val workDir: File, private val renderer: WebViewRenderer) {
 
-    suspend fun scan(url: String, filter: String? = null, mode: RenderMode = RenderMode.AUTO): ScanResult {
+    suspend fun scan(url: String, filter: String? = null, mode: RenderMode = RenderMode.AUTO): ScanResult =
+        load(url, mode, enough = ENOUGH_PLAIN_PAGES, count = { it.images.size }) { pageUrl, html, rendered ->
+            val page = HtmlImageExtractor.extract(html, pageUrl, filter)
+            ScanResult(pageUrl, page.title, page.images, rendered)
+        }
+
+    /**
+     * Fetches [url] and [parse]s it. In [RenderMode.AUTO] the plain HTML is tried first and the
+     * browser engine only when that fails or [count] of the result is below [enough]; whichever
+     * attempt found more wins.
+     */
+    suspend fun <T> load(
+        url: String,
+        mode: RenderMode,
+        enough: Int,
+        count: (T) -> Int,
+        parse: (pageUrl: String, html: String, rendered: Boolean) -> T,
+    ): T {
         val target = normalizeUrl(url)
         warmUp()
-        var plain: ScanResult? = null
+        var plain: T? = null
         var plainError: Throwable? = null
         if (mode == RenderMode.AUTO) {
             try {
-                plain = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     val (finalUrl, html) = fetchHtml(target)
-                    val page = HtmlImageExtractor.extract(html, finalUrl, filter)
-                    ScanResult(finalUrl, page.title, page.images, rendered = false)
+                    parse(finalUrl, html, false)
                 }
-                if (plain.images.size >= ENOUGH_PLAIN_PAGES) return plain
+                if (count(result) >= enough) return result
+                plain = result
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -76,14 +77,13 @@ class WebScraper(private val workDir: File, private val renderer: WebViewRendere
         }
         val rendered = try {
             val page = renderer.render(target)
-            val found = withContext(Dispatchers.Default) { HtmlImageExtractor.extract(page.html, page.url, filter) }
-            ScanResult(page.url, found.title, found.images, rendered = true)
+            withContext(Dispatchers.Default) { parse(page.url, page.html, true) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            plain ?: throw (plainError ?: e)
+            return plain ?: throw (plainError ?: e)
         }
-        return if (plain != null && plain.images.size > rendered.images.size) plain else rendered
+        return if (plain != null && count(plain) > count(rendered)) plain else rendered
     }
 
     /** Headers an image request needs to look like it came from the page (thumbnails use these too). */

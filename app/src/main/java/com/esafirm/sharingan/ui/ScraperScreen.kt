@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import android.view.ViewGroup
+import com.esafirm.sharingan.data.scraper.WebViewRenderer
 import androidx.compose.material3.Switch
 import androidx.compose.ui.viewinterop.AndroidView
 
@@ -74,7 +75,7 @@ fun ScraperScreen(vm: ScraperViewModel, onBack: () -> Unit, onRead: (Long) -> Un
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Download from web") },
+                title = { Text("Downloads") },
                 navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
                     if (jobs.any { it.status == ScrapeStatus.DONE }) TextButton(vm::clearFinished) { Text("Clear done") }
@@ -163,7 +164,7 @@ fun ScraperScreen(vm: ScraperViewModel, onBack: () -> Unit, onRead: (Long) -> Un
                         job = job,
                         onTitle = { vm.setTitle(job.id, it) },
                         onDownload = { vm.download(job.id) },
-                        onRetry = { if (job.scan == null || job.status == ScrapeStatus.EMPTY) vm.rescan(job.id) else vm.download(job.id) },
+                        onRetry = { vm.retry(job.id) },
                         onRemove = { vm.remove(job.id) },
                         onRead = { job.mangaId?.let(onRead) },
                         headers = vm::imageHeaders,
@@ -172,7 +173,7 @@ fun ScraperScreen(vm: ScraperViewModel, onBack: () -> Unit, onRead: (Long) -> Un
                 }
             }
             // Outside the list so it stays attached (and keeps running) however far the list is scrolled.
-            rendering?.let { url -> BrowserCard(vm, url, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
+            rendering?.let { url -> BrowserCard(vm.renderer, url, Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
         }
     }
 }
@@ -317,7 +318,7 @@ private fun Thumbnails(images: List<String>, referer: String, headers: (String, 
 
 /** The live browser while a JavaScript page loads: watch it scroll, or tap through a verification. */
 @Composable
-private fun BrowserCard(vm: ScraperViewModel, url: String, modifier: Modifier = Modifier) {
+fun BrowserCard(renderer: WebViewRenderer, url: String, modifier: Modifier = Modifier) {
     Card(modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -333,10 +334,10 @@ private fun BrowserCard(vm: ScraperViewModel, url: String, modifier: Modifier = 
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                TextButton(vm.renderer::grabNow) { Text("Use now") }
+                TextButton(renderer::grabNow) { Text("Use now") }
             }
             AndroidView(
-                factory = { vm.renderer.webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                factory = { renderer.webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
                 modifier = Modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(8.dp)),
             )
             Text(

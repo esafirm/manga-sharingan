@@ -6,13 +6,21 @@ A fast, minimal Android manga (PDF) reader.
 - **Reader**: swipe pages (RTL/LTR toggle), pinch / double-tap zoom, page slider, tap to toggle UI.
 - **Resume**: last page saved on every page turn; reopening jumps straight to it.
 - **Status**: Unread / Reading / Completed, updated automatically and overridable by long-press.
-- **Download from web**: paste chapter links (⋮ → *Download from web…*, or share a link from the browser). The page images are detected, downloaded and packed into a PDF on your shelf. Only download content you have the right to.
+- **Find manga online** (⋮ → *Find manga online…*): search a title across sources, open a series to see its chapter list, tick chapters (long-press selects a range, *Select not on shelf* picks what you're missing) and download them as `Title - Ch. N` PDFs that group into one series. Chapters already on your shelf are marked.
+  - Built-in source: **MangaDex** (public API; pick the chapter language next to it).
+  - **Add website**: any manga site — a series page, or the home page of a site about one series, is read for its chapter list; add a search address with `{query}` to search it too. Or paste any series link under *Open a link*.
+  - Only download content you have the right to.
 
 ## Why it's fast
 - PDFs are copied once into app storage; page count + cover are computed at import.
 - Reader opens directly on the saved page (page count is in the DB, no waiting on the PDF).
 - Platform `PdfRenderer` (no native libs), renders on a background dispatcher, serialised by a mutex.
 - LRU bitmap cache + prefetch of neighbouring pages; stale renders are cancelled when you flick past.
+
+## Sources
+`data/source/`: a `MangaSource` can `search`, list `chapters` and resolve a chapter's `pages`.
+- `MangaDexSource` uses the MangaDex API (search with covers, chapter feed in the chosen language, one upload per chapter number; page links come from the at-home server right before downloading because they expire).
+- `WebsiteSource` (user-added, saved in SharedPreferences) and the hidden `LinkSource` (pasted links) use `ChapterListExtractor`: every same-site link with a chapter number in its text or address is a candidate, the biggest group with the same address shape is the chapter list, sorted by number. Search pages keep links whose text contains every query word. JavaScript-built lists go through the WebView automatically.
 
 ## Web scraper
 `data/scraper/` turns a chapter web page into a PDF:

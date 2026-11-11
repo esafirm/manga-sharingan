@@ -131,7 +131,7 @@ fun LibraryScreen(
                         IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.MoreVert, "More") }
                         DropdownMenu(sortMenu, { sortMenu = false }) {
                             DropdownMenuItem(
-                                text = { Text("Download from web…") },
+                                text = { Text("Find manga online…") },
                                 onClick = { sortMenu = false; onOpenScraper() },
                             )
                             HorizontalDivider()
@@ -281,7 +281,7 @@ private fun EmptyShelf() {
         Text("Your shelf is empty", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tap “Add manga” to pick PDFs, share them straight from Telegram, or download chapters from the web (⋮ menu).\nVolumes of the same series group together automatically.",
+            "Tap “Add manga” to pick PDFs, share them straight from Telegram, or find manga online (⋮ menu).\nVolumes of the same series group together automatically.",
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.outline,
         )
